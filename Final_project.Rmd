@@ -1,0 +1,300 @@
+---
+title: 'DS 705 Final Project'
+author: "Jim Ryan"
+date: "03/01/2020"
+output: word_document
+fontsize: 12pt
+---
+
+```{r message=F,warning=F,include=FALSE}
+
+library(data.table)
+library(sqldf)
+library(caTools)
+library(DataExplorer)
+library(tidyverse)
+library(caret)
+library(BaylorEdPsych)
+library(ResourceSelection)
+```
+Part 2: Introduction 
+
+For this project I will use logistic regression to predict which applicants are likely to default on their loans. I am going to use the loans50k data set that was given to us as part of this assignment.  This data set contains 50,000 loans in various statuses and various amounts. There are 32 available variables in the data set.  My response variable will be the status variable. I will start by preparing and cleaning the data. 
+
+```{r message=F,warning=F}
+
+LoansDT <- fread("Loans50k.csv")
+
+```
+Part 3: Preparing and Cleaning the Data
+
+The data contains different variables collected as either part of the application process or information from when the loan was disbursed. I am trying to predict which variable or variables will allow me to predict whether a loan becomes default or not. I removed all loans that did not have a status of ‘Fully Paid’, ‘Default’ or ‘Charged Off’. This left me with the instructions state to set copied the response variable – status – into another field. Then to update the status of loans that were Fully Paid to ‘Good’ and the ones that we ‘Default’ or ‘Charged Off’ to ‘Bad’.  
+
+```{r echo=FALSE, message=FALSE,warnings=FALSE,,include=FALSE}
+# Delete loans that do not have status 'Charged Off','Default','Fully Paid'
+LoansDT <- sqldf(c("Delete from  LoansDT where status not in('Charged Off','Default','Fully Paid')","select * from main.LoansDT")) 
+LoansDT$status2 <- LoansDT$status  # create new status column                  
+ 
+
+# set new status field to 0 for fully paid and 1 for default or charged off
+LoansDT <- sqldf(c("update LoansDT set status2 = 'Good' where status2 ='Fully Paid'", "select * from main.LoansDT"))
+LoansDT <- sqldf(c("update LoansDT set status2 = 'Bad' where status2 in('Charged Off','Default')","select * from main.LoansDT"))
+```
+
+There are 27,074 loans or 78% with a status of ‘Good’ and 7,581 loans or 22 percent with a status of ‘Bad’.  Here is a Histogram of that shows the number of good and bad loans after the status has been updated.    
+```{r message=F}
+#bar ploit on status
+p1 <- ggplot(data=LoansDT, aes(x=status2)) + 
+      geom_bar(fill="blue") + 
+      xlab("Loans By Status")
+p1
+
+#Update good to 1 bad to 0 and make var a factor
+LoansDT <- sqldf(c("UPDATE LoansDT SET status2 = 1 where status2 = 'Good'","UPDATE LoansDT SET status2 = 0 where status2 = 'Bad'", "Select * from LoansDT"))
+
+# set status field as factor
+LoansDT$status2 <- as.factor(LoansDT$status2)
+```
+I used sapply with a sum on the NA in the data set to determine which variable had NA in them and how many there were. I found that the only 3 variables that had NA values in them were revolRatio (15 NA), bcOpen (360 NA) and bcRatio (384 NA).Since the missing values were only around 1 percent of the total number for these variables, I imputed them using the mean of all the values for that specific variable.
+
+```{r echo=FALSE, message=FALSE}
+# ```{r echo=FALSE, message=FALSE,include=FALSE}
+
+sapply(LoansDT, function(x) sum(is.na(x)))
+
+LoansDT$revolRatio[is.na(LoansDT$revolRatio)] <- mean(LoansDT$revolRatio,na.rm=T)
+LoansDT$bcOpen[is.na(LoansDT$bcOpen)] <- mean(LoansDT$bcOpen,na.rm=T)
+LoansDT$bcRatio [is.na(LoansDT$bcRatio)] <- mean(LoansDT$bcRatio,na.rm=T)
+
+
+
+```
+Then I focused my attention on the employment variable. There were 15,268 different values for employment including 1918 where the value is blank. I selected all rows where the value had a count greater than 100.
+I updated 1789 values of the employment variable that had the word manager in the to be just ‘Manager’.  There were 934 different variations of the word ‘Teacher’, so I updated them all to be teacher. 
+
+The 'Grade variable was updated from ‘A’ thru ‘G’ to 0 thru 6 and made into a factor.  I update the 'verified' variable by updating those with a value of 'Source Verified' to 'Verified' and made that variable a factor. I did something similar with the home variable. I set the variable to OWN when the value was mortgage so then there were just 2 categorical variables - 'own' and 'rent' made the variable a factor. The variable term only had 2 values (36 months and 60 months) so the variable term2 was updated to a factor. 
+```{r message=F,warning=F}
+
+sqldf("Select count(*) from LoansDT where employment like '%manager%' ")
+# update all employment rows with word manager in the to Manager
+LoansDT <- sqldf(c("update  LoansDT set employment = 'manager' where employment like '%manager%'","Select * from LoansDT"))
+
+# update all employment rows with word manager in the to manager
+LoansDT <- sqldf(c("update  LoansDT set employment = 'Teacher' where employment like '%teach%'","Select * from LoansDT"))
+
+
+#Update grade to numeric (0 thru 6)
+ LoansDT <- sqldf(c("UPDATE LoansDT SET grade = CASE grade WHEN 'A' THEN 0 WHEN 'B' THEN 1  WHEN 'C' THEN 2  WHEN 'D' THEN 3 WHEN 'E' THEN 4 WHEN 'F' THEN 5 WHEN 'G' THEN 6 END","Select * from LoansDT"))
+# set grade as a factor
+ LoansDT$grade <- as.factor(LoansDT$grade)
+
+#Update home to OWN when value is mortgage, set own = 1 and rent = 0 and maake it a factor  
+ LoansDT <- sqldf(c("Update LoansDT set home = 'OWN' where home = 'MORTGAGE'","Select * from LoansDT"))
+  LoansDT$home <- as.factor(LoansDT$home)
+
+# Update  Source Verified amd Verified to 1 Not verified as 0 make it a factor
+  LoansDT <- sqldf(c("UPDATE LoansDT SET verified =  'Verified' where verified =  'Source Verified'","Select * from LoansDT")) 
+
+ LoansDT$verified <- as.factor(LoansDT$verified)
+ 
+# make term column a factor
+LoansDT$term <- as.factor(LoansDT$term)
+
+```
+
+I removed the following variables because more than 25 percent of them were 0: pubRec, delinq2yr, and inq6mth. I also dropped the original status variable.
+
+```{r message=F,warning=F}
+# remove original status and original term columns
+LoansDT$status <- NULL
+
+colnames(LoansDT)
+sqldf ("select count (*) from LoansDT where pubRec = 0 ")
+sqldf ("select count (*) from LoansDT where delinq2yr = 0 ")
+sqldf ("select count (*) from LoansDT where inq6mth = 0 ")
+
+# following columns are removed as over 25% of values are blank or 0
+LoansDT$pubRec <- NULL 
+LoansDT$delinq2yr <- NULL 
+LoansDT$inq6mth <- NULL
+
+
+```
+Part 4:Exploring and Transforming the Data
+
+Now I delve into some data exploration and transformation. First I do some exploration on the data set as a whole. I create box plots of payment and status to see if there is an observable relationship between payment and status. There is no observable relationship between payment and status for the entire dataset. Then I did the same for openAcc income and loanID The only one that showed an obvious relationship was totalBal. The 'LoanID' variable looks constant no matter what the status. I assume this is just a loan Identifier and will drop it. The other 3 variables I will keep for for part 5.  
+
+```{r  message=FALSE, warning=FALSE}
+par(mfrow=c(2,2))
+ggplot(aes(x=payment,y=status2),data=LoansDT)+
+  geom_boxplot(color='darkblue') + ggtitle("Plot of status by Payment")
+
+ggplot(aes(x=openAcc,y=status2),data=LoansDT)+
+  geom_boxplot(color='red') + ggtitle("Plot of status by openAcc")
+
+ggplot(aes(x=income,y=status2),data=LoansDT)+
+  geom_boxplot(color='darkred')  + ggtitle("Plot of status by Income")
+
+ggplot(aes(x=loanID,y=status2),data=LoansDT)+
+  geom_boxplot(color='green')  + ggtitle("Plot of status by loanid")
+
+LoansDT$loanID <- NULL
+```
+
+Then I divided up my modified data frame into good and bad loans based on the status2 variable. Then I made bar graphs of some of the categorical variables divided by good and bad loans to see if there were any obvious relationships. I plotted the  'term' and the 'verified' variable.
+For the term variable 'bad' loans have a greater percentage of loans with 60 month terms than the 'good' loans. I will keep this variable for further exploration. It appears that there might be some relationship between the 'verified' variable and status. I will keep this variable for part 5.
+
+```{r  message=FALSE, warning=FALSE}
+loans_bad <- sqldf("Select * from LoansDT where status2 = 0")
+loans_good <- sqldf("Select * from LoansDT where status2 = 1")
+
+ 
+p <- ggplot(loans_bad, aes(status2, fill = term)) + facet_wrap(~term)
+p + geom_bar()
+
+p <- ggplot(loans_good, aes(status2, fill = term)) + facet_wrap(~term)
+p + geom_bar()
+
+p <- ggplot(loans_bad, aes(status2, fill = verified)) + facet_wrap(~verified)
+p + geom_bar()
+
+p <- ggplot(loans_good, aes(status2, fill = verified)) + facet_wrap(~verified)
+p + geom_bar()
+
+p <- ggplot(loans_bad, aes(status2, fill = home)) + facet_wrap(~home)
+p + geom_bar()
+
+p <- ggplot(loans_good, aes(status2, fill = home)) + facet_wrap(~home)
+p + geom_bar()
+
+```
+I plotted a histogram of all the variables in the LoansDT dataframe to get an overall sense of of the data is normally distributed or not.Due to space limitations, I did not include this plot. Much of  the data looks right skewed.
+```{r message=F,include=FALSE}
+plot_histogram(LoansDT)
+```
+I plotted the states against status for both the good and bad loans but noticed any relationship. AS expected the more populous states (New York and California) had the higher number of loans both good and bad. I will be dropping this variable.   I am also going to drop the employment field as there are so many different values in there it will slow my regression down.
+```{r message=F,include=FALSE}
+
+p <- ggplot(loans_bad, aes(status2, fill = state)) + facet_wrap(~state)
+p + geom_bar()
+
+p <- ggplot(loans_good, aes(status2, fill = state)) + facet_wrap(~state)
+p + geom_bar()
+
+LoansDT$state <- NULL
+loans_good$state <- NULL
+loans_bad$state <- NULL
+
+LoansDT$employment <- NULL
+loans_good$employment <- NULL
+loans_bad$employment <- NULL
+
+
+
+```
+I plotted  variables from each dataframe ('Good' and 'Bad') to determine if the data is normally distributed or not. There is a definite right skew to many of the numeric variables. "rate","Amount", "debt to income ratio" look normally distributed so I will not transform them. To transform the rest of the numeric variables, I created 2 new dataframes for the good and bad loans and with just the numeric fields IO am going to transform.  Then I used the log1p function on the dataframes. I use this function instead of the log function because some of the variables contain zeroes and log has issues with zeroes. I will not transform the following variables as the look normal: "revolRatio" , "accOpen24" and "accOpen24". I plot the data into a histogram again after the log and the data loos much more normally distributed. There are a few that now look left-skewed.  Also after performing it the first time and looking for NA's i found that it created a total to 384 NAs in bcratio between the 2 groups so I am removing that from the dataframes I apply the log1p to.  The debtIncRat and rate fields were also normally distributed so I did not include them in  the group of variables to apply the log1p to. I also did not transform "totalPaid" as we are not supposed to use that values as a predictor. I split the categorical variables into a separate dataframe to join with the logged dataframes later. I plotted several of the variables after the log was applied to the to check the results.
+```{r message=F,warning=F}
+par(mfrow=c(4,2))
+plot_histogram(loans_bad$amount,title="Bad loans amount")
+plot_histogram(loans_bad$rate,title="Bad loans rate")
+plot_histogram(loans_bad$debtIncRat,title="bad loans Debt to income ratio")
+plot_histogram(loans_good$totalIlLim,title="Good loans TotalIlim")
+
+nologvars <- subset(LoansDT,select=c(bcRatio,debtIncRat,rate, totalPaid))
+
+good_loan_numeric <- loans_good [ c("amount" , "payment" , "income"  , "openAcc"     ,  "revolRatio"  , "totalAcc" , 
+                                    "totalBal"    , "totalRevLim" , "accOpen24"   , "avgBal" ,"bcOpen" , "totalLim",  
+                                     "totalRevBal"  , "totalBcLim"  , "totalIlLim")]
+
+bad_loan_numeric <- loans_bad[ c("amount" , "payment" , "income"  , "openAcc"     ,  "revolRatio"  , "totalAcc" , 
+                                    "totalBal"    , "totalRevLim" , "accOpen24"   , "avgBal" ,"bcOpen" , "totalLim",  
+                                     "totalRevBal"  , "totalBcLim"  , "totalIlLim")]
+
+good_loan_discrete <- loans_good[ c("grade", "length" ,"home" ,"verified","reason" ,
+                                    "status2","term" )]
+
+bad_loan_discrete <- loans_bad[ c("grade","length" ,"home" ,"verified","reason", 
+                                    "status2","term")]
+good_loan_log <- log1p(good_loan_numeric)
+bad_loan_log <- log1p(bad_loan_numeric)
+
+plot_histogram(good_loan_log$totalIlLim,title="Good loans LOG TotalIlim")
+plot_histogram(bad_loan_log$amount,title="Bad loans LOG amount")
+```
+
+I checked the dataframes resulting from the log1p function for NA's and found none. I am not showing it to conserve space.
+```{r message=F,warning=F,echo=FALSE,include=FALSE}
+sapply(good_loan_log, function(x) sum(is.na(x)))
+sapply(bad_loan_log, function(x) sum(is.na(x)))
+```
+Next I will do some density plots with some of the different logged variables  too see if there is a noticeable difference between good and bad loans.  I did density plots of  openacc  and totalLim  for good and bad loans. I didn't see much difference for openacc or totalLim between good or bad loans.
+
+
+I wasn't able to eliminate many fields in my data exploration but I suspect once I start building my model, that is when I will eliminate more fields.
+```{r message=F, include=FALSE}
+plot(density(good_loan_log$openAcc))
+plot(density(bad_loan_log$openAcc))
+
+plot(density(good_loan_log$totalLim))
+plot(density(bad_loan_log$totalLim))
+
+rejoin_df <-cbind(good_loan_discrete , good_loan_log)
+rejoin_bad_df <- cbind(bad_loan_discrete , bad_loan_log) 
+rejoin_full <- rbind(rejoin_df,rejoin_bad_df)
+
+Loan_regrsn <- cbind(rejoin_full, nologvars)
+
+
+```
+PART 2 - Section 5 - The Logistic Model
+For the start of Section 5, I will create 2 datasets from the Loan_regrsn dataframe from Step 4. One dataset will be my training dataset and will contain 80% of the data, the other will be my test dataset and will contain 20% of the data. I end up 6931 in Loan_test and 27724 in Loan_training
+
+```{r}
+training_size <- 0.8
+set.seed(2112)
+training_rows <- sample(seq_len(nrow(Loan_regrsn)), size = floor(training_size * nrow(Loan_regrsn)))
+Loan_training <- Loan_regrsn[training_rows, ]
+Loan_test <- Loan_regrsn[-training_rows, ]
+```
+
+Next I will run the full model and use the summary function to see which variables are significant and I should include in my model. Based upon the coefficients with significant p values I will keep the following values: grade,verified,reason,term,income,revolRatio,totalAcc,totalRevLim,accOpen24,bcOpen,totalRevBal,totalIlLim.  When I run this model the p=values for the following fields are no longer significant:bcOpen,totalRevBal and totalIlLim, so I will drop then and try a third time. A strange thing happened When I ran the third model, T p-values was significant at .013 but it was higher than my second model which had a p-value of .012. The Mcfadden psueod R Squared for the third model (.09414) was less than the second model  (.09462) but just barely.Looking at the model only 3 of the 12 values of the reasn variable were significant so I decided to drop the reason variable and try it again. The results were much better for the 4th time.The p-value is .0006 with a McFadden Pseudo R2 of .0932. This is the model I will move forward with. To save space, I will only show the p-value for the first and second models.
+
+```{r}
+Loantrain_one <-glm(status2~.,data=Loan_training,family="binomial")
+summary(Loantrain_one)
+
+r1 <- PseudoR2(Loantrain_one)
+r1[1]
+
+
+Loantrain_two <- glm(status2~grade+  verified + reason + term + income + revolRatio +totalAcc + totalRevLim + accOpen24 + bcOpen + totalRevBal +totalIlLim  ,data=Loan_training,family="binomial")
+summary(Loantrain_two)
+
+r2 <- PseudoR2(Loantrain_two)
+r2[1]
+
+Loantrain_three <- glm(status2~grade+  verified  + reason + term + income + revolRatio +totalAcc + totalRevLim + accOpen24 ,data=Loan_training,family="binomial")
+summary(Loantrain_three)
+
+r3 <- PseudoR2(Loantrain_x)
+r3[1]
+
+
+Loantrain_4 <- glm(status2~grade +  verified  + term + income + revolRatio +totalAcc + totalRevLim + accOpen24 ,data=Loan_training,family="binomial")
+summary(Loantrain_4)
+
+r4 <- PseudoR2(Loantrain_4)
+r4[1]
+```
+Below I will use my model created above to predict the status for loans in the test data. After I use my model to predict the status of the loans, I will create a confusion matrix to determine the overall accuracy of the model.
+
+```{r}
+
+test_model <- glm(status2~grade +  verified  + term + income + revolRatio +totalAcc + totalRevLim + accOpen24 ,data=Loan_test,family="binomial")
+probabilities <- predict(test_model,type="response") 
+Bad_or_Good <- ifelse(probabilities>0.5,1,0)
+Bad_or_Good <-  as.factor(Bad_or_Good)
+confusionMatrix(loan_final,Loan_test$status2)
+
+```
+
